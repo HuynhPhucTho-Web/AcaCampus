@@ -1,0 +1,7 @@
+/* Tailwind v4 with lightningcss: @tailwind directives may not be recognized by the minifier,
+   so keep file valid CSS. Tailwind output will be handled by Vite/Tailwind pipeline. */
+
+/* If you want to keep using directives, ensure tailwindcss is configured to process them.
+   For now, leave file empty to prevent "Unknown at rule @tailwind". */
+
+@import "tailwindcss";
