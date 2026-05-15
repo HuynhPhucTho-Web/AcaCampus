@@ -74,3 +74,9 @@ export default defineConfig([
 npm install tailwindcss @tailwindcss/vite
 npm install xlsx
 npm install xlsx file-saver
+
+
+npm install -g firebase-tools
+firebase login
+cd your-project
+firebase init hosting
