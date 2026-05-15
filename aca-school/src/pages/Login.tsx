@@ -82,7 +82,9 @@ export default function Login() {
     
     login(mockUser);
     setIsLoading(false);
-    navigate('/dashboard');
+
+    if (selectedRole === 'teacher') navigate('/teacher/dashboard');
+    else navigate('/dashboard');
   };
 
   const currentRole = roleConfig[selectedRole];

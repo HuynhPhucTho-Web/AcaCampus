@@ -73,3 +73,4 @@ export default defineConfig([
 ```
 npm install tailwindcss @tailwindcss/vite
 npm install xlsx
+npm install xlsx file-saver

@@ -1,0 +1,5 @@
+- [ ] Tách AI Chatbot panel (UI + voice + send + AI response giả lập + navigation) từ src/layouts/DashboardLayout.tsx sang component riêng: src/components/chatbot/AIChatbotPanel.tsx
+- [ ] Sửa voice flow: khi SpeechRecognition có transcript thì gọi send trực tiếp (không phụ thuộc bấm nút)
+- [ ] Tắt nút Send khi message được tạo từ voice transcript (type tay vẫn dùng nút Send)
+- [ ] DashboardLayout.tsx chỉ còn layout/sidebar/header và render <AIChatbotPanel />
+- [ ] Typecheck/build để đảm bảo không lỗi TS
