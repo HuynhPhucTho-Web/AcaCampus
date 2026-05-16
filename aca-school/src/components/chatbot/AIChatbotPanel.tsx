@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bot,
@@ -24,32 +24,67 @@ type Props = {
   aiGreetingViFixed: string;
 };
 
+const VOICE_SUBMIT_IDLE_MS = 3000;
+
 export default function AIChatbotPanel({
   theme,
   language,
   getLabel,
   t,
   aiGreetingViFixed,
-}: Props) {
+}: Props): JSX.Element {
   const navigate = useNavigate();
   const { chatMessages, addChatMessage } = useAppStore();
 
   const [showAIChat, setShowAIChat] = useState(false);
   const hasSpokenGreetingRef = useRef(false);
 
+  // Đảm bảo TTS chỉ đọc 1 lần cho mỗi tin nhắn assistant
+  const lastSpokenAssistantIdRef = useRef<string | null>(null);
+
+  // Chặn đọc lặp khi voice tạo lệnh điều hướng
+  const lastSpokenNavKeyRef = useRef<string | null>(null);
+
+  // Voice session state
+  const recognitionRef = useRef<any>(null);
+  const voiceSessionIdRef = useRef<string>('');
+  const voiceIsSubmittingRef = useRef(false);
+  const voiceLastHeardAtRef = useRef<number>(0);
+
+  // Buffer transcript (hiện lên ô input và dùng để submit)
   const [aiInput, setAiInput] = useState('');
-  const [isListening, setIsListening] = useState(false);
+
+  // TTS state
   const [isSpeaking, setIsSpeaking] = useState(false);
 
-  // Voice gửi tin nhắn => disable nút Send để đúng yêu cầu
+  // UI voice listen state
+  const [isListening, setIsListening] = useState(false);
+
+  // Voice gửi tin nhắn => disable nút Send
   const [isAutoSendingFromVoice, setIsAutoSendingFromVoice] = useState(false);
+
+  // Debounce timer: khi người dùng dừng nói 3s => submit
+  const idleSubmitTimerRef = useRef<number | null>(null);
+
+  const langMap = useMemo(
+    () => ({
+      vi: 'vi-VN',
+      en: 'en-US',
+      ja: 'ja-JP',
+      zh: 'zh-CN',
+      ko: 'ko-KR',
+      fr: 'fr-FR',
+      es: 'es-ES',
+      de: 'de-DE',
+    }),
+    []
+  );
 
   useEffect(() => {
     if (chatMessages.length === 0) {
       const greetingMessage: ChatMessage = {
         id: 'greeting',
         role: 'assistant',
-        // keep getLabel used to avoid TS/Eslint unused-var
         content: getLabel('aiGreeting') || aiGreetingViFixed,
         timestamp: new Date().toISOString(),
       };
@@ -68,20 +103,62 @@ export default function AIChatbotPanel({
 
     // Navigation patterns
     const navPatterns: Record<string, { path: string; keywords: string[] }> = {
-      '/dashboard': { path: '/dashboard', keywords: ['trang chủ', 'home', 'ダッシュボード', '首页', '홈', 'accueil', 'inicio', 'startseite'] },
-      '/dashboard/news': { path: '/dashboard/news', keywords: ['bảng tin', 'tin tức', 'news', 'ニュース', '新闻', '뉴스', 'actualités', 'noticias', 'nachrichten'] },
-      '/dashboard/schedule': { path: '/dashboard/schedule', keywords: ['thời khóa biểu', 'lịch học', 'schedule', '時間割', '课程表', '시간표', 'emploi du temps', 'horario', 'stundenplan'] },
-      '/dashboard/grades': { path: '/dashboard/grades', keywords: ['sổ liên lạc', 'điểm', 'grades', '成績', '成绩', '성적', 'notes', 'notas', 'noten'] },
-      '/dashboard/leave-request': { path: '/dashboard/leave-request', keywords: ['xin nghỉ', 'nghỉ học', 'leave', '休暇', '请假', '휴가', 'congés', 'permiso', 'urlaub'] },
-      '/dashboard/messages': { path: '/dashboard/messages', keywords: ['nhắn tin', 'tin nhắn', 'messages', 'メッセージ', '消息', '메시지', 'messages', 'mensajes', 'nachrichten'] },
-      '/dashboard/stickers': { path: '/dashboard/stickers', keywords: ['nhãn dán', 'stickers', 'ステッカー', '贴纸', '스티커', 'autocollants', 'pegatinas', 'aufkleber'] },
-      '/dashboard/forum': { path: '/dashboard/forum', keywords: ['diễn đàn', 'forum', 'フォーラム', '论坛', '포럼', 'forum', 'foro'] },
-      '/dashboard/analysis': { path: '/dashboard/analysis', keywords: ['phân tích', 'analysis', '分析', '분석', 'analyse', 'análisis'] },
-      '/dashboard/documents': { path: '/dashboard/documents', keywords: ['tài liệu', 'documents', 'ドキュメント', '文档', '문서', 'documents', 'documentos', 'dokumente'] },
-      '/dashboard/quiz': { path: '/dashboard/quiz', keywords: ['trò chơi', 'quiz', 'ゲーム', '测验', '퀴즈', 'quiz', 'jeu'] },
+      '/dashboard': {
+        path: '/dashboard',
+        keywords: ['trang chủ', 'home', 'ダッシュボード', '首页', '홈', 'accueil', 'inicio', 'startseite'],
+      },
+      '/dashboard/news': {
+        path: '/dashboard/news',
+        keywords: ['bảng tin', 'tin tức', 'news', 'ニュース', '新闻', '뉴스', 'actualités', 'noticias', 'nachrichten'],
+      },
+      '/dashboard/schedule': {
+        path: '/dashboard/schedule',
+        keywords: [
+          'thời khóa biểu',
+          'lịch học',
+          'schedule',
+          '時間割',
+          '课程表',
+          '시간표',
+          'emploi du temps',
+          'horario',
+          'stundenplan',
+        ],
+      },
+      '/dashboard/grades': {
+        path: '/dashboard/grades',
+        keywords: ['sổ liên lạc', 'điểm', 'grades', '成績', '成绩', '성적', 'notes', 'notas', 'noten'],
+      },
+      '/dashboard/leave-request': {
+        path: '/dashboard/leave-request',
+        keywords: ['xin nghỉ', 'nghỉ học', 'leave', '休暇', '请假', '휴가', 'congés', 'permiso', 'urlaub'],
+      },
+      '/dashboard/messages': {
+        path: '/dashboard/messages',
+        keywords: ['nhắn tin', 'tin nhắn', 'messages', 'メッセージ', '消息', '메시지', 'messages', 'mensajes', 'nachrichten'],
+      },
+      '/dashboard/stickers': {
+        path: '/dashboard/stickers',
+        keywords: ['nhãn dán', 'stickers', 'ステッカー', '贴纸', '스티커', 'autocollants', 'pegatinas', 'aufkleber'],
+      },
+      '/dashboard/forum': {
+        path: '/dashboard/forum',
+        keywords: ['diễn đàn', 'forum', 'フォーラム', '论坛', '포럼', 'forum', 'foro'],
+      },
+      '/dashboard/analysis': {
+        path: '/dashboard/analysis',
+        keywords: ['phân tích', 'analysis', '分析', '분석', 'analyse', 'análisis'],
+      },
+      '/dashboard/documents': {
+        path: '/dashboard/documents',
+        keywords: ['tài liệu', 'documents', 'ドキュメント', '文档', '문서', 'documents', 'documentos', 'dokumente'],
+      },
+      '/dashboard/quiz': {
+        path: '/dashboard/quiz',
+        keywords: ['trò chơi', 'quiz', 'ゲーム', '测验', '퀴즈', 'quiz', 'jeu'],
+      },
     };
 
-    // Check for navigation commands
     for (const [, data] of Object.entries(navPatterns)) {
       if (data.keywords.some((kw) => lowerInput.includes(kw))) {
         navigatePath = data.path;
@@ -89,7 +166,6 @@ export default function AIChatbotPanel({
       }
     }
 
-    // Generate response based on input
     const responsePayload = (() => {
       if (navigatePath) {
         const pageNames: Record<string, string> = {
@@ -184,6 +260,26 @@ export default function AIChatbotPanel({
     return { response: responsePayload, navigatePath };
   };
 
+  const handleSpeak = (text: string) => {
+    if (!('speechSynthesis' in window)) return;
+    if (!text?.trim()) return;
+
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = (langMap as any)[language] || 'vi-VN';
+    utterance.rate = 1;
+    utterance.pitch = 1;
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+
   const handleSendMessage = () => {
     if (!aiInput.trim()) return;
 
@@ -200,64 +296,68 @@ export default function AIChatbotPanel({
     const { response, navigatePath } = processAIResponse(aiInput);
     setAiInput('');
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response,
-        timestamp: new Date().toISOString(),
-      };
-      addChatMessage(aiMessage);
-
-      if (navigatePath) {
-        setTimeout(() => {
-          handleNavigationFromAI(navigatePath);
-        }, 1500);
-      }
-    }, 1000);
-  };
-
-  const handleSendMessageFromVoice = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setIsAutoSendingFromVoice(true);
-
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: trimmed,
+    const aiMessage: ChatMessage = {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content: response,
       timestamp: new Date().toISOString(),
     };
-    addChatMessage(userMessage);
+    addChatMessage(aiMessage);
 
-    const { response, navigatePath } = processAIResponse(trimmed);
+    const navKey = navigatePath ? `${navigatePath}__${aiMessage.content}` : null;
 
-    setAiInput(''); // voice => không cần để nút bấm
+    if (aiMessage.content.trim()) {
+      if (!navigatePath) {
+        if (lastSpokenAssistantIdRef.current !== aiMessage.id) {
+          lastSpokenAssistantIdRef.current = aiMessage.id;
+          handleSpeak(aiMessage.content);
+        }
+      } else if (lastSpokenNavKeyRef.current !== navKey) {
+        lastSpokenNavKeyRef.current = navKey;
+        handleSpeak(aiMessage.content);
+      }
+    }
 
-    setTimeout(() => {
-      const aiMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response,
-        timestamp: new Date().toISOString(),
-      };
-      addChatMessage(aiMessage);
+    if (navigatePath) {
+      setTimeout(() => handleNavigationFromAI(navigatePath), 1200);
+    }
+  };
 
-      if (navigatePath) {
-        setTimeout(() => handleNavigationFromAI(navigatePath), 1500);
+  const clearIdleTimer = () => {
+    if (idleSubmitTimerRef.current) {
+      window.clearTimeout(idleSubmitTimerRef.current);
+      idleSubmitTimerRef.current = null;
+    }
+  };
+
+  const scheduleIdleSubmit = () => {
+    clearIdleTimer();
+    idleSubmitTimerRef.current = window.setTimeout(() => {
+      // user đã dừng nói khoảng 3s => chỉ dừng nhận giọng để người dùng bấm nút Send gửi
+      try {
+        if (recognitionRef.current) {
+          recognitionRef.current.stop();
+        }
+      } catch {
+        // ignore
       }
       setIsAutoSendingFromVoice(false);
-    }, 1000);
+      voiceIsSubmittingRef.current = false;
+    }, VOICE_SUBMIT_IDLE_MS);
   };
 
   const handleVoiceInput = () => {
     const hasNative = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-
     if (!hasNative) {
       alert(language === 'vi' ? 'Trình duyệt không hỗ trợ nhận dạng giọng nói!' : 'Browser does not support speech recognition!');
       return;
     }
+
+    type SpeechRecognitionResultLike = { transcript: string; isFinal?: boolean };
+
+    type SpeechRecognitionEventLike = {
+      results?: Array<Array<SpeechRecognitionResultLike>>;
+    };
 
     type SpeechRecognitionCtor = new () => {
       lang: string;
@@ -268,94 +368,74 @@ export default function AIChatbotPanel({
       onerror: null | (() => void);
       onend: null | (() => void);
       start: () => void;
+      stop: () => void;
     };
 
     const SpeechRecognitionCtor =
-      (window as unknown as { SpeechRecognition?: SpeechRecognitionCtor }).SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor }).webkitSpeechRecognition;
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognitionCtor) return;
 
+    // reset session
+    voiceSessionIdRef.current = Date.now().toString();
+    voiceIsSubmittingRef.current = false;
+    setIsAutoSendingFromVoice(false);
+
+    voiceLastHeardAtRef.current = Date.now();
+    setAiInput('');
+
+    clearIdleTimer();
+    setIsListening(true);
+
     const recognition = new SpeechRecognitionCtor();
+    recognitionRef.current = recognition;
 
-    const langMap: Record<string, string> = {
-      vi: 'vi-VN',
-      en: 'en-US',
-      ja: 'ja-JP',
-      zh: 'zh-CN',
-      ko: 'ko-KR',
-      fr: 'fr-FR',
-      es: 'es-ES',
-      de: 'de-DE',
-    };
-
-    recognition.lang = langMap[language] || 'vi-VN';
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.lang = (langMap as any)[language] || 'vi-VN';
+    recognition.continuous = true;
+    recognition.interimResults = true;
 
     recognition.onstart = () => {
       setIsListening(true);
     };
 
-    type SpeechRecognitionResultLike = { transcript: string };
-    type SpeechRecognitionEventLike = { results?: Array<Array<SpeechRecognitionResultLike>> };
-
     recognition.onresult = (event: SpeechRecognitionEventLike) => {
-      const transcript = event.results?.[0]?.[0]?.transcript;
-      if (typeof transcript === 'string' && transcript.trim()) {
-        setIsListening(false);
+      const results = event.results || [];
+      // cập nhật transcript mới nhất để hiện lên ô input
+      let latest = '';
 
-        // ====== CHANGE: auto-send ngay khi có transcript ======
-        handleSendMessageFromVoice(transcript);
-
-        // Không setTimeout gọi handleSendMessage nữa (vì aiInput/node Send sẽ gây chậm hoặc cần bấm)
-        // =========================================================
+      for (const resChunk of results) {
+        for (const res of resChunk) {
+          if (typeof res.transcript === 'string') latest = res.transcript;
+        }
       }
+
+      latest = latest.trim();
+      if (!latest) return;
+
+      // cập nhật UI transcript
+      setAiInput(latest);
+
+      // reset idle timer => người ta nói chưa hết câu thì chưa submit
+      voiceLastHeardAtRef.current = Date.now();
+      scheduleIdleSubmit();
     };
 
     recognition.onerror = () => {
       setIsListening(false);
       setIsAutoSendingFromVoice(false);
+      clearIdleTimer();
+      voiceIsSubmittingRef.current = false;
     };
 
     recognition.onend = () => {
       setIsListening(false);
+      clearIdleTimer();
+      // Không auto-submit nữa: để người dùng bấm nút Send tự gửi
+      setIsAutoSendingFromVoice(false);
+      voiceIsSubmittingRef.current = false;
     };
 
     recognition.start();
-  };
-
-  const handleSpeak = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-
-    if (isSpeaking) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
-      return;
-    }
-
-    const utterance = new SpeechSynthesisUtterance(text);
-
-    const langMap: Record<string, string> = {
-      vi: 'vi-VN',
-      en: 'en-US',
-      ja: 'ja-JP',
-      zh: 'zh-CN',
-      ko: 'ko-KR',
-      fr: 'fr-FR',
-      es: 'es-ES',
-      de: 'de-DE',
-    };
-
-    utterance.lang = langMap[language] || 'vi-VN';
-    utterance.rate = 1;
-    utterance.pitch = 1;
-
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-
-    window.speechSynthesis.speak(utterance);
   };
 
   return (
@@ -404,13 +484,21 @@ export default function AIChatbotPanel({
                 </div>
                 <div>
                   <h3 className="font-bold">{t.aiAssistant}</h3>
-                  <p className="text-xs text-white/80">{isListening ? '🎙️ ' + t.listening : isSpeaking ? '🔊 ' + t.speaking : 'Online'}</p>
+                  <p className="text-xs text-white/80">
+                    {isListening ? '🎙️ ' + t.listening : isSpeaking ? '🔊 ' + t.speaking : 'Online'}
+                  </p>
                 </div>
               </div>
               <button
                 onClick={() => {
                   hasSpokenGreetingRef.current = false;
                   setShowAIChat(false);
+                  clearIdleTimer();
+                  try {
+                    recognitionRef.current?.stop?.();
+                  } catch {
+                    // ignore
+                  }
                 }}
                 className="p-2 hover:bg-white/20 rounded-xl transition-colors"
               >
@@ -424,7 +512,11 @@ export default function AIChatbotPanel({
           </div>
 
           {/* Quick Actions */}
-          <div className={`px-4 py-3 flex gap-2 overflow-x-auto border-b ${theme === 'dark' ? 'border-gray-700 bg-gray-800' : 'border-gray-100 bg-gray-50'}`}>
+          <div
+            className={`px-4 py-3 flex gap-2 overflow-x-auto border-b ${
+              theme === 'dark' ? 'border-gray-700 bg-gray-800' : 'border-gray-100 bg-gray-50'
+            }`}
+          >
             {[
               { label: t.schedule, path: '/dashboard/schedule', icon: Calendar },
               { label: t.grades, path: '/dashboard/grades', icon: BookOpen },
@@ -474,7 +566,16 @@ export default function AIChatbotPanel({
                   {msg.role === 'assistant' && (
                     <div className="mt-2 flex items-center gap-2">
                       <button
-                        onClick={() => (isSpeaking ? handleSpeak('') : handleSpeak(msg.content))}
+                        onClick={() => {
+                          if (isSpeaking) {
+                            window.speechSynthesis?.cancel();
+                            setIsSpeaking(false);
+                            lastSpokenAssistantIdRef.current = null;
+                            return;
+                          }
+                          lastSpokenAssistantIdRef.current = msg.id;
+                          handleSpeak(msg.content);
+                        }}
                         className="text-xs opacity-70 hover:opacity-100 flex items-center gap-1 px-2 py-1 rounded-full bg-white/10"
                       >
                         {isSpeaking ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
@@ -508,7 +609,11 @@ export default function AIChatbotPanel({
               <button
                 onClick={handleVoiceInput}
                 className={`p-3 rounded-full transition-all ${
-                  isListening ? 'bg-red-500 text-white animate-pulse' : theme === 'dark' ? 'bg-gray-700 text-white hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  isListening
+                    ? 'bg-red-500 text-white animate-pulse'
+                    : theme === 'dark'
+                      ? 'bg-gray-700 text-white hover:bg-gray-600'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
                 title={isListening ? t.listening : t.voiceInput}
               >
@@ -520,13 +625,14 @@ export default function AIChatbotPanel({
                 value={aiInput}
                 onChange={(e) => {
                   setAiInput(e.target.value);
-                  // nếu user bắt đầu type thủ công thì re-enable nút Send
                   setIsAutoSendingFromVoice(false);
                 }}
                 onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                 placeholder={t.typeMessage}
                 className={`flex-1 px-4 py-3 rounded-full outline-none focus:ring-2 focus:ring-cyan-500 ${
-                  theme === 'dark' ? 'bg-gray-700 text-white placeholder-gray-400' : 'bg-gray-100 text-gray-800 placeholder-gray-400'
+                  theme === 'dark'
+                    ? 'bg-gray-700 text-white placeholder-gray-400'
+                    : 'bg-gray-100 text-gray-800 placeholder-gray-400'
                 }`}
               />
 
