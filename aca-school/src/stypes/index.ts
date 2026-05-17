@@ -3,7 +3,8 @@ export type Language = 'vi' | 'en' | 'ja' | 'zh' | 'ko' | 'fr' | 'es' | 'de';
 export type Theme = 'light' | 'dark';
 
 // User types
-export type UserRole = 'student' | 'teacher' | 'parent';
+export type UserRole = 'student' | 'teacher' | 'parent' | 'admin';
+
 
 export interface User {
   id: string;

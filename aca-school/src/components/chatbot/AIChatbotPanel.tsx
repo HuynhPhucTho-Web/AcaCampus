@@ -32,7 +32,7 @@ export default function AIChatbotPanel({
   getLabel,
   t,
   aiGreetingViFixed,
-}: Props): JSX.Element {
+: React.ReactElement {
   const navigate = useNavigate();
   const { chatMessages, addChatMessage } = useAppStore();
 

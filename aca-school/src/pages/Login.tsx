@@ -13,6 +13,7 @@ import {
 
 const roleConfig = {
   student: {
+
     icon: GraduationCap,
     title: 'Học sinh',
     subtitle: 'Khám phá hành trình học tập thú vị',
@@ -20,6 +21,7 @@ const roleConfig = {
     bgPattern: '🌸',
   },
   teacher: {
+
     icon: BookOpen,
     title: 'Giáo viên',
     subtitle: 'Quản lý lớp học và theo dõi tiến độ',
@@ -27,18 +29,28 @@ const roleConfig = {
     bgPattern: '📚',
   },
   parent: {
+
     icon: Heart,
     title: 'Phụ huynh',
     subtitle: 'Đồng hành cùng con trong hành trình học tập',
     color: 'from-orange-400 to-amber-500',
     bgPattern: '❤️',
   },
+  admin: {
+    icon: Sparkles,
+    title: 'Admin',
+    subtitle: 'Quản trị hệ thống và người dùng',
+    color: 'from-purple-400 to-indigo-500',
+    bgPattern: '🛡️',
+  },
 };
+
 
 export default function Login() {
   const navigate = useNavigate();
   const login = useAppStore((state) => state.login);
-  const [selectedRole, setSelectedRole] = useState<'student' | 'teacher' | 'parent'>('student');
+  const [selectedRole, setSelectedRole] = useState<'student' | 'teacher' | 'parent' | 'admin'>('student');
+
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -84,11 +96,13 @@ export default function Login() {
     setIsLoading(false);
 
     if (selectedRole === 'teacher') navigate('/teacher/dashboard');
+    else if (selectedRole === 'admin') navigate('/admin/dashboard');
     else navigate('/dashboard');
   };
 
-  const currentRole = roleConfig[selectedRole];
+  const currentRole = roleConfig[selectedRole as keyof typeof roleConfig];
   const Icon = currentRole.icon;
+
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
@@ -127,7 +141,7 @@ export default function Login() {
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden">
           {/* Role Selection Tabs */}
           <div className="flex border-b border-gray-100">
-            {(Object.keys(roleConfig) as Array<'student' | 'teacher' | 'parent'>).map((role) => {
+            {(Object.keys(roleConfig) as Array<keyof typeof roleConfig>).map((role) => {
               const config = roleConfig[role];
               const RoleIcon = config.icon;
               return (
